@@ -1,6 +1,8 @@
 from ._version import _VERSION, _AUTHOR_EMAIL, _AUTHOR, _TITLE
 from ._version import _MAINTAINER, _DESCRIPTION, _DOCS_URL, _PROJECT_URL
 
+from .app import AbstractApp
+
 __version__ = _VERSION
 __maintainer__ = _MAINTAINER
 __author__ = _AUTHOR

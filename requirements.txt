@@ -1,0 +1,5 @@
+pykeepass
+PyYaml
+sqlalchemy
+colorlog
+psutil
