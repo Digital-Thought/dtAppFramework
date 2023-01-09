@@ -111,15 +111,18 @@ class AbstractApp(object):
         self.log_path = app_logging.init(self.app_spec["short_name"], app_paths=self.app_paths,
                                          spawned_process=self.is_multiprocess_spawned_instance())
 
-        logging.info(
-            f'{self.app_spec["full_name"]} ({self.app_spec["short_name"]}), Version: {self.app_spec["version"]}. '
-            f'Process ID: {os.getpid()}')
-
         if not self.is_multiprocess_spawned_instance():
+            logging.info(
+                f'{self.app_spec["full_name"]} ({self.app_spec["short_name"]}), Version: {self.app_spec["version"]}. '
+                f'Process ID: {os.getpid()}')
             print(f'Version: {self.app_spec["version"]}')
             if self.log_path is not None:
                 print(f'Log Path: {self.log_path}')
             print('\n')
+        else:
+            logging.info(
+                f'SPAWNED PROCESS --- {self.app_spec["full_name"]} ({self.app_spec["short_name"]}), Version: {self.app_spec["version"]}. '
+                f'Process ID: {os.getpid()}')
 
         args = arg_parser.parse_args()
 
