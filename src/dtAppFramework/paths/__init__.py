@@ -3,13 +3,17 @@ import os
 import shutil
 import logging
 
+from typing import Union
+from multiprocessing import current_process
+
 
 class ApplicationPaths(object):
 
     def __init__(self, app_short_name, forced_os=None, forced_dev_mode=False, auto_create=True,
-                 clean_temp=True) -> None:
+                 clean_temp=True, spawned_instance=False) -> None:
         self.app_short_name = app_short_name
         self.forced_os = forced_os
+        self.spawned_instance = spawned_instance
         self.auto_create = auto_create
         self.clean_temp = clean_temp
         if forced_dev_mode:
@@ -45,41 +49,75 @@ class ApplicationPaths(object):
             return platform.system()
 
     def __init_logging_root_path(self):
+        _path = None
         if os.environ.get("DEV_MODE", None):
-            return f'{os.getcwd()}/logs'
+            _path = f'{os.getcwd()}/logs'
         elif self.__os() == "Windows":
-            return f'{os.environ.get("LOCALAPPDATA")}/{self.app_short_name}/logs'
+            _path = f'{os.environ.get("LOCALAPPDATA")}/{self.app_short_name}/logs'
         elif self.__os() == "Darwin":
-            return f'{os.path.expanduser("~/Library/Logs")}/{self.app_short_name}'
+            _path = f'{os.path.expanduser("~/Library/Logs")}/{self.app_short_name}'
         elif self.__os() == "Linux":
-            return f'/var/log/{self.app_short_name}'
+            _path = f'/var/log/{self.app_short_name}'
+
+        os.environ['dt_LOGGING_PATH'] = _path
+        return _path
 
     def __init_app_data_root_path(self):
+        _path = None
         if os.environ.get("DEV_MODE", None):
-            return f'{os.getcwd()}/data/app'
+            _path = f'{os.getcwd()}/data/app'
         elif self.__os() == "Windows":
-            return f'{os.environ.get("ALLUSERSPROFILE")}/{self.app_short_name}'
+            _path = f'{os.environ.get("ALLUSERSPROFILE")}/{self.app_short_name}'
         elif self.__os() == "Darwin":
-            return f'{os.path.expanduser("/Library/Application Support")}/{self.app_short_name}'
+            _path = f'{os.path.expanduser("/Library/Application Support")}/{self.app_short_name}'
         elif self.__os() == "Linux":
-            return f'/etc/{self.app_short_name}'
+            _path = f'/etc/{self.app_short_name}'
+
+        os.environ['dt_APP_DATA'] = _path
+        return _path
 
     def __init_usr_data_root_path(self):
+        _path = None
         if os.environ.get("DEV_MODE", None):
-            return f'{os.getcwd()}/data/usr'
+            _path = f'{os.getcwd()}/data/usr'
         elif self.__os() == "Windows":
-            return f'{os.environ.get("APPDATA")}/{self.app_short_name}'
+            _path = f'{os.environ.get("APPDATA")}/{self.app_short_name}'
         elif self.__os() == "Darwin":
-            return f'{os.path.expanduser("~/Library/Application Support")}/{self.app_short_name}'
+            _path = f'{os.path.expanduser("~/Library/Application Support")}/{self.app_short_name}'
         elif self.__os() == "Linux":
-            return f'{os.path.expanduser("~/.config")}/{self.app_short_name}'
+            _path = f'{os.path.expanduser("~/.config")}/{self.app_short_name}'
+
+        os.environ['dt_USR_DATA'] = _path
+        return _path
 
     def __init_tmp_root_path(self):
-        if os.environ.get("DEV_MODE", None):
-            return f'{os.getcwd()}/temp'
+        _path = None
+        if self.spawned_instance:
+            _path = f'{os.environ["dt_TMP"]}/{current_process().name}'
+        elif os.environ.get("DEV_MODE", None):
+            _path = f'{os.getcwd()}/temp'
         elif self.__os() == "Windows":
-            return f'{os.environ.get("TEMP")}/{self.app_short_name}'
+            _path = f'{os.environ.get("TEMP")}/{self.app_short_name}'
         elif self.__os() == "Darwin":
-            return f'{os.environ.get("TMPDIR")}{self.app_short_name}'
+            _path = f'{os.environ.get("TMPDIR")}{self.app_short_name}'
         elif self.__os() == "Linux":
-            return f'{os.path.expanduser("/tmp")}/{self.app_short_name}'
+            _path = f'{os.path.expanduser("/tmp")}/{self.app_short_name}'
+
+        os.environ['dt_TMP'] = _path
+        return _path
+
+
+app_paths: Union[ApplicationPaths, None] = None
+"""
+The loaded ApplicationPaths.  This will be None until load is called.
+"""
+
+
+def load(app_short_name, forced_os=None, forced_dev_mode=False, auto_create=True,
+         clean_temp=True, spawned_instance=False) -> ApplicationPaths:
+    """
+    """
+    global app_paths
+    app_paths = ApplicationPaths(app_short_name=app_short_name, forced_os=forced_os, forced_dev_mode=forced_dev_mode,
+                                 auto_create=auto_create, clean_temp=clean_temp, spawned_instance=spawned_instance)
+    return app_paths

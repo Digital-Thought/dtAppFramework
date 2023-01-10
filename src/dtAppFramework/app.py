@@ -7,7 +7,7 @@ import traceback
 from multiprocessing import current_process
 from argparse import ArgumentParser
 from . import app_logging
-from .paths import ApplicationPaths
+from . import paths
 from . import settings
 from . import secrets_store
 
@@ -24,7 +24,7 @@ class AbstractApp(object):
         for key in self.app_spec:
             if not self.app_spec[key]:
                 raise Exception(f"Missing '{key}'")
-        self.app_paths = ApplicationPaths(app_short_name=self.app_spec['short_name'])
+        self.app_paths = None
         self.log_path = None
         self.settings = None
         super().__init__()
@@ -107,6 +107,7 @@ class AbstractApp(object):
     def run(self):
         arg_parser = argparse.ArgumentParser(prog=self.app_spec["short_name"], description=self.app_spec["description"])
         self.__define_args(arg_parser)
+        paths.load(app_short_name=self.app_spec['short_name'], spawned_instance=self.is_multiprocess_spawned_instance())
 
         self.log_path = app_logging.init(self.app_spec["short_name"], app_paths=self.app_paths,
                                          spawned_process=self.is_multiprocess_spawned_instance())
