@@ -107,7 +107,7 @@ class AbstractApp(object):
     def run(self):
         arg_parser = argparse.ArgumentParser(prog=self.app_spec["short_name"], description=self.app_spec["description"])
         self.__define_args(arg_parser)
-        paths.load(app_short_name=self.app_spec['short_name'], spawned_instance=self.is_multiprocess_spawned_instance())
+        self.app_paths = paths.load(app_short_name=self.app_spec['short_name'], spawned_instance=self.is_multiprocess_spawned_instance())
 
         self.log_path = app_logging.init(self.app_spec["short_name"], app_paths=self.app_paths,
                                          spawned_process=self.is_multiprocess_spawned_instance())
