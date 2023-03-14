@@ -3,7 +3,12 @@ import pathlib
 import logging
 import random
 import string
+import subprocess
+import sys
+import re
+import pybase64
 
+from itertools import cycle
 from shutil import copyfile
 from pykeepass import PyKeePass
 from ..paths import ApplicationPaths
@@ -29,12 +34,12 @@ class SecretsStore(object):
         super().__init__()
         self.app_paths = app_paths
         self.secrets_store_path = build_secrets_path(self.app_paths)
-        if not os.path.exists(self.secrets_store_path):
-            raise SecretsStoreException(f'A Secrets Store does not exists at: {self.secrets_store_path}.')
 
-        if not password:
-            raise SecretsStoreException('No password was provided for Secrets Store.  '
-                                        'Password must be provided or environment variable SECRETS_STORE_PASSWORD set.')
+        if password is None:
+            password = self.guid()
+
+        if not os.path.exists(self.secrets_store_path):
+            self.__initialise_secrets_store(password)
 
         try:
             self.keepass_instance = PyKeePass(self.secrets_store_path, password)
@@ -51,6 +56,54 @@ class SecretsStore(object):
         for entry in self.__store_group().entries:
             if entry.username == SECRETS_ENV_TAG:
                 os.environ[entry.title] = entry.password
+
+    def __initialise_secrets_store(self, password):
+        try:
+            logging.info(f'Creating Secrets Store at: {self.secrets_store_path}')
+            copyfile(SECRETS_TEMPLATE, self.secrets_store_path)
+
+            keepass_instance = PyKeePass(self.secrets_store_path, DEFAULT_PASSWORD)
+            keepass_instance.password = password
+            keepass_instance.add_group(keepass_instance.root_group, SECRETS_STORE_GROUP)
+            keepass_instance.save()
+            logging.info(f'Successfully created Secrets Store.')
+        except Exception as ex:
+            logging.error(f'Failed to create Secrets Store.  Error: {str(ex)}')
+            raise ex
+
+    def run(self, cmd):
+        try:
+            return subprocess.run(cmd, shell=True, capture_output=True, check=True, encoding="utf-8") \
+                .stdout \
+                .strip()
+        except:
+            return None
+
+    def guid(self):
+        base = None
+        if sys.platform == 'darwin':
+            base = self.run(
+                "ioreg -d2 -c IOPlatformExpertDevice | awk -F\\\" '/IOPlatformUUID/{print $(NF-1)}'",
+            )
+
+        if sys.platform == 'win32' or sys.platform == 'cygwin' or sys.platform == 'msys':
+            base = self.run('wmic csproduct get uuid').split('\n')[2] \
+                .strip()
+
+        if sys.platform.startswith('linux'):
+            base = self.run('cat /var/lib/dbus/machine-id') or \
+                   self.run('cat /etc/machine-id')
+
+        if sys.platform.startswith('openbsd') or sys.platform.startswith('freebsd'):
+            base = self.run('cat /etc/hostid') or \
+                   self.run('kenv -q smbios.system.uuid')
+
+        if not base:
+            raise SecretsStoreException("Failed to determined unique machine ID")
+
+        key = re.sub("[^a-zA-Z]+", "", base)
+        xored = ''.join(chr(ord(x) ^ ord(y)) for (x, y) in zip(base, cycle(key)))
+        return pybase64.b64encode_as_string(xored.encode())
 
     def add_secret(self, name: str, secret: str, init_env: bool = False, hidden: bool = False):
         if self.get_entry(name):

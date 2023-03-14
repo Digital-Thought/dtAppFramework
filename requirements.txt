@@ -3,3 +3,4 @@ PyYaml
 sqlalchemy
 colorlog
 psutil
+pybase64

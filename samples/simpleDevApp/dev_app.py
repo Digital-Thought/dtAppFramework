@@ -3,7 +3,7 @@ import os
 
 sys.path.append(os.path.abspath('../../src'))
 
-from dtAppFramework import AbstractApp
+from dtAppFramework.app import AbstractApp
 from dtAppFramework import settings
 
 
@@ -14,9 +14,9 @@ class SimpleDevApp(AbstractApp):
 
     def main(self, args):
         print("Main Called")
-        print(self.settings['setting'])
-        print(self.settings['setting1'])
-        print(self.settings['setting2'])
+        print(self.settings.get('setting', 'NOPE'))
+        print(self.settings.get('setting1', 'NOPE1'))
+        print(self.settings.get('setting2', 'NOPE2'))
         print(self.settings.get('setting3', None))
         self.settings['setting2'] = 'Persistent Value - Overwrite App'
 
