@@ -4,3 +4,4 @@ sqlalchemy
 colorlog
 psutil
 pybase64
+boto3

@@ -18,6 +18,7 @@ class SimpleDevApp(AbstractApp):
         print(self.settings.get('setting1', 'NOPE1'))
         print(self.settings.get('setting2', 'NOPE2'))
         print(self.settings.get('setting3', None))
+        print(self.settings.get_secret('test2', None))
         self.settings['setting2'] = 'Persistent Value - Overwrite App'
 
 

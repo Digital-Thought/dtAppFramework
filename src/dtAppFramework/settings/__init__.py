@@ -11,6 +11,7 @@ import os
 from typing import Union
 from ..secrets_store import get_secret_store
 from ..paths import ApplicationPaths
+from ..resources import ResourceManager
 
 Base = declarative_base()
 
@@ -150,6 +151,7 @@ class Configuration(dict):
         self.app_persistent_settings_store = None
         self.usr_persistent_settings_store = None
         self.reload_yaml()
+        self.resource_manager = ResourceManager(app_paths=self.app_paths)
 
         self.app_persistent_settings_store = PersistentSettingStore(
             path=f'{self.app_paths.app_data_root_path}/persistent.settings')
@@ -219,11 +221,18 @@ class Configuration(dict):
             if isinstance(value, str) and str(value).startswith('ENV/'):
                 return os.getenv(str(value).replace('ENV/', '').strip(), value)
             if isinstance(value, str) and str(value).startswith('SEC/'):
-                return get_secret_store(self.app_paths).get_secret(str(value).replace('SEC/', '').strip())
+                return get_secret_store(self.app_paths, resources=self.resource_manager, aws_profile=self.get("secrets_store.aws_profile", None), aws_sso=config.get("secrets_store.aws_sso", False)).get_secret(str(value).replace('SEC/', '').strip())
             if not value:
                 return default
             return value
         except KeyError:
+            return default
+
+    def get_secret(self, key, default=None):
+        try:
+            return get_secret_store(self.app_paths, resources=self.resource_manager, aws_profile=self.get("secrets_store.aws_profile", None), aws_sso=config.get("secrets_store.aws_sso", False)).get_secret(key)
+        except:
+            logging.warning(f"Secret '{key}' not found. Returning default.")
             return default
 
     def __getattr__(self, key):

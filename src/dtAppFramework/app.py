@@ -42,14 +42,14 @@ class AbstractApp(object):
         raise NotImplementedError
 
     def load_config(self, args):
-        settings.load(self.app_paths)
+        config = settings.load(self.app_paths)
 
         if args.password:
-            secrets_store.get_secret_store(app_paths=self.app_paths, password=args.password)
+            secrets_store.get_secret_store(app_paths=self.app_paths, password=args.password, resources=config.resource_manager, aws_profile=config.get("secrets_store.aws_profile", None), aws_sso=config.get("secrets_store.aws_sso", False))
         else:
-            secrets_store.get_secret_store(app_paths=self.app_paths)
+            secrets_store.get_secret_store(app_paths=self.app_paths, resources=config.resource_manager, aws_profile=config.get("secrets_store.aws_profile", None), aws_sso=config.get("secrets_store.aws_sso", False))
 
-        self.settings = settings.config
+        self.settings = config
         if not self.is_multiprocess_spawned_instance():
             self.app_paths.log_paths()
 
@@ -74,29 +74,20 @@ class AbstractApp(object):
             arg_parser.add_argument('--name', action='store', type=str, required=True, help="Secret Name")
             arg_parser.add_argument('--value', action='store', type=str, required=True, help="Secret Value")
             arg_parser.add_argument('--env', action='store_true',
-                                    help="Load secret as environment variable on Secrets Store initialisation")
+                                   help="Load secret as environment variable on Secrets Store initialisation")
         else:
             arg_parser.add_argument('--password', action='store', type=str,
                                     required=False, help="Secrets Store password")
 
             self.define_args(arg_parser)
 
-    def __initialise_environment__(self, args):
-        try:
-            if args.password:
-                secrets_store.initialise_new_secrets_store(app_paths=self.app_paths, password=args.password)
-            else:
-                secrets_store.initialise_new_secrets_store(app_paths=self.app_paths)
-        except Exception as ex:
-            logging.error(f'Failed to create Secrets Store.  Error: {str(ex)}')
-            raise ex
-
     def __add_secret__(self, args):
+        config = settings.load(self.app_paths)
         try:
             if args.password:
-                store = secrets_store.get_secret_store(app_paths=self.app_paths, password=args.password)
+                store = secrets_store.get_secret_store(app_paths=self.app_paths, password=args.password, resources=config.resource_manager, aws_profile=config.get("secrets_store.aws_profile", None), aws_sso=config.get("secrets_store.aws_sso", False))
             else:
-                store = secrets_store.get_secret_store(app_paths=self.app_paths)
+                store = secrets_store.get_secret_store(app_paths=self.app_paths, resources=config.resource_manager, aws_profile=config.get("secrets_store.aws_profile", None), aws_sso=config.get("secrets_store.aws_sso", False))
 
             store.add_secret(args.name, args.value, args.env)
             store.close()
@@ -128,9 +119,7 @@ class AbstractApp(object):
         args = arg_parser.parse_args()
 
         if not self.is_multiprocess_spawned_instance():
-            if args.init:
-                self.__initialise_environment__(args)
-            elif args.add_secret:
+            if args.add_secret:
                 self.__add_secret__(args)
             else:
                 self.__main(args)

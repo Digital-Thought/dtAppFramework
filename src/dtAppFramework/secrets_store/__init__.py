@@ -7,13 +7,17 @@ import subprocess
 import sys
 import re
 import pybase64
+import boto3
+from aws_sso_util import login as aws_sso_util_login
 
 from itertools import cycle
 from shutil import copyfile
 from pykeepass import PyKeePass
 from ..paths import ApplicationPaths
+from ..resources import ResourceManager
 
-SECRETS_TEMPLATE = str(pathlib.Path(__file__).parent.absolute()) + '/../_resources/secrets.store.kdbx'
+SECRETS_TEMPLATE = "secrets.store.kdbx"
+EMBEDDED_RESOURCES = str(pathlib.Path(__file__).parent.absolute()) + '/../_resources'
 SECRETS_STORE_GROUP = "Secrets_Store"
 SECRETS_ENV_TAG = "ENV"
 SECRETS_HIDDEN_TAG = "HIDDEN"
@@ -30,10 +34,24 @@ def build_secrets_path(app_paths: ApplicationPaths):
 
 class SecretsStore(object):
 
-    def __init__(self, app_paths: ApplicationPaths, password: str = os.getenv('SECRETS_STORE_PASSWORD', None)) -> None:
+    def __init__(self, app_paths: ApplicationPaths, resources: ResourceManager,
+                 password: str = os.getenv('SECRETS_STORE_PASSWORD', None), aws_profile=None,
+                 aws_sso=False) -> None:
         super().__init__()
         self.app_paths = app_paths
+        self.resources = resources
+        self.resources.add_resource_path(EMBEDDED_RESOURCES)
         self.secrets_store_path = build_secrets_path(self.app_paths)
+
+        try:
+            if aws_sso:
+                self.run(f'aws sso login --profile {aws_profile}')
+            aws_session = boto3.session.Session(profile_name=aws_profile)
+            self.aws_secretsmanager = aws_session.client('secretsmanager')
+            self.aws_secretsmanager.list_secrets()
+        except:
+            logging.warning(f'AWS Secrets Manager, Not Available')
+            self.aws_secretsmanager = None
 
         if password is None:
             password = self.guid()
@@ -60,7 +78,7 @@ class SecretsStore(object):
     def __initialise_secrets_store(self, password):
         try:
             logging.info(f'Creating Secrets Store at: {self.secrets_store_path}')
-            copyfile(SECRETS_TEMPLATE, self.secrets_store_path)
+            copyfile(self.resources.get_resource_path(SECRETS_TEMPLATE), self.secrets_store_path)
 
             keepass_instance = PyKeePass(self.secrets_store_path, DEFAULT_PASSWORD)
             keepass_instance.password = password
@@ -140,7 +158,16 @@ class SecretsStore(object):
         self.save()
 
     def get_entry(self, name: str):
-        entry = self.keepass_instance.find_entries(title=name, group=self.__store_group(), first=True)
+        entry = None
+        try:
+            if self.aws_secretsmanager:
+                entry = self.aws_secretsmanager.get_secret_value(SecretId=name)['SecretString']
+        except:
+            logging.warning(f'Secret {name} not found in AWS SecretsManager.  Trying Local Instance.')
+
+        if not entry:
+            entry = self.keepass_instance.find_entries(title=name, group=self.__store_group(), first=True)
+
         return entry
 
     def get_secret(self, name: str) -> str:
@@ -148,6 +175,8 @@ class SecretsStore(object):
         if entry is None:
             raise SecretsStoreException(f'Secret {name} does not exists in store.')
 
+        if isinstance(entry, str):
+            return entry
         return entry.password
 
     def get_secret_names(self, exclude_hidden: bool = True) -> list:
@@ -167,36 +196,16 @@ class SecretsStore(object):
 secret_store: SecretsStore = None
 
 
-def get_secret_store(app_paths: ApplicationPaths, password=None):
+def get_secret_store(app_paths: ApplicationPaths, resources: ResourceManager, password=None, aws_profile=None,
+                     aws_sso=False):
     global secret_store
 
     if secret_store is None:
         if password is None:
-            secret_store = SecretsStore(app_paths=app_paths)
+            secret_store = SecretsStore(app_paths=app_paths, resources=resources, aws_profile=aws_profile,
+                                        aws_sso=aws_sso)
         else:
-            secret_store = SecretsStore(app_paths=app_paths, password=password)
+            secret_store = SecretsStore(app_paths=app_paths, resources=resources, password=password,
+                                        aws_profile=aws_profile, aws_sso=aws_sso)
 
     return secret_store
-
-
-def initialise_new_secrets_store(app_paths: ApplicationPaths, password: str = os.getenv('SECRETS_STORE_PASSWORD', None)):
-    if password is None:
-        raise SecretsStoreException('No password was provided for new Secrets Store.  '
-                                    'Password must be provided or environment variable SECRETS_STORE_PASSWORD set.')
-
-    secrets_path = build_secrets_path(app_paths)
-    if os.path.exists(secrets_path):
-        raise SecretsStoreException(f'A Secrets Store already exists at: {secrets_path}.')
-
-    try:
-        logging.info(f'Creating Secrets Store at: {secrets_path}')
-        copyfile(SECRETS_TEMPLATE, secrets_path)
-
-        keepass_instance = PyKeePass(secrets_path, DEFAULT_PASSWORD)
-        keepass_instance.password = password
-        keepass_instance.add_group(keepass_instance.root_group, SECRETS_STORE_GROUP)
-        keepass_instance.save()
-        logging.info(f'Successfully created Secrets Store.')
-    except Exception as ex:
-        logging.error(f'Failed to create Secrets Store.  Error: {str(ex)}')
-        raise ex
