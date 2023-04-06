@@ -8,7 +8,6 @@ import sys
 import re
 import pybase64
 import boto3
-from aws_sso_util import login as aws_sso_util_login
 
 from itertools import cycle
 from shutil import copyfile
