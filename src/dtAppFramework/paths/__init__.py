@@ -8,22 +8,32 @@ from multiprocessing import current_process
 
 
 class ApplicationPaths(object):
+    _instance = None
 
-    def __init__(self, app_short_name, forced_os=None, forced_dev_mode=False, auto_create=True,
-                 clean_temp=True, spawned_instance=False) -> None:
-        self.app_short_name = app_short_name
-        self.forced_os = forced_os
-        self.spawned_instance = spawned_instance
-        self.auto_create = auto_create
-        self.clean_temp = clean_temp
-        if forced_dev_mode:
-            os.environ['DEV_MODE'] = "True"
-        self.logging_root_path = self.__init_logging_root_path()
-        self.app_data_root_path = self.__init_app_data_root_path()
-        self.usr_data_root_path = self.__init_usr_data_root_path()
-        self.tmp_root_path = self.__init_tmp_root_path()
-        self.__init_directories()
-        super().__init__()
+    def __new__(cls, app_short_name=None, forced_os=None, forced_dev_mode=False, auto_create=True,
+                clean_temp=True, spawned_instance=False, *args, **kwargs):
+        if not cls._instance:
+            cls._instance = super(ApplicationPaths, cls).__new__(cls, *args, **kwargs)
+        return cls._instance
+
+    def __init__(self, app_short_name=None, forced_os=None, forced_dev_mode=False, auto_create=True,
+                 clean_temp=True, spawned_instance=False, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        if app_short_name:
+            self.app_short_name = app_short_name
+            self.forced_os = forced_os
+            self.spawned_instance = spawned_instance
+            self.auto_create = auto_create
+            self.clean_temp = clean_temp
+            self.forced_dev_mode = forced_dev_mode
+
+            if self.forced_dev_mode:
+                os.environ['DEV_MODE'] = "True"
+
+            self.logging_root_path = self.__init_logging_root_path()
+            self.app_data_root_path = self.__init_app_data_root_path()
+            self.usr_data_root_path = self.__init_usr_data_root_path()
+            self.tmp_root_path = self.__init_tmp_root_path()
 
     def log_paths(self):
         logging.info(f'Logging Root Path: {self.logging_root_path}')

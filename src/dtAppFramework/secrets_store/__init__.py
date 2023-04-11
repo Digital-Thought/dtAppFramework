@@ -44,12 +44,15 @@ class SecretsStore(object):
 
         try:
             if aws_sso:
-                self.run(f'aws sso login --profile {aws_profile}')
+                aws_sso_resp = self.run(f'aws2 sso login --profile {aws_profile}')
+                if not aws_sso_resp or "Successfully logged into Start URL" not in aws_sso_resp:
+                    raise SecretsStoreException(f"Unable to initialise SSO for the AWS profile {aws_profile}.  Please "
+                                                f"confirm you have the AWS CLI Installed.")
             aws_session = boto3.session.Session(profile_name=aws_profile)
             self.aws_secretsmanager = aws_session.client('secretsmanager')
             self.aws_secretsmanager.list_secrets()
-        except:
-            logging.warning(f'AWS Secrets Manager, Not Available')
+        except Exception as ex:
+            logging.warning(f'AWS Secrets Manager, Not Available. Error: {str(ex)}')
             self.aws_secretsmanager = None
 
         if password is None:
