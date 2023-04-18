@@ -1,213 +1,87 @@
-import os
-import pathlib
 import logging
-import random
-import string
-import subprocess
-import sys
-import re
-import pybase64
-import boto3
 
-from itertools import cycle
-from shutil import copyfile
-from pykeepass import PyKeePass
 from ..paths import ApplicationPaths
-from ..resources import ResourceManager
-
-SECRETS_TEMPLATE = "secrets.store.kdbx"
-EMBEDDED_RESOURCES = str(pathlib.Path(__file__).parent.absolute()) + '/../_resources'
-SECRETS_STORE_GROUP = "Secrets_Store"
-SECRETS_ENV_TAG = "ENV"
-SECRETS_HIDDEN_TAG = "HIDDEN"
-DEFAULT_PASSWORD = 'password'
+from ..settings import Settings
+from ..misc import singleton
+from .local_secret_store import LocalSecretStore
+from .aws_secret_store import AWSSecretsStore
+from .azure_secret_store import AzureSecretsStore
+from enum import Enum
 
 
-class SecretsStoreException(Exception):
-    pass
+class SecretsManagerScopePriorities(Enum):
+    USER = 1
+    APP = 2
+    AWS = 3
+    AZURE = 4
 
 
-def build_secrets_path(app_paths: ApplicationPaths):
-    return f'{app_paths.usr_data_root_path}/secrets.store.kdbx'
+@singleton()
+class SecretsManager(object):
 
-
-class SecretsStore(object):
-
-    def __init__(self, app_paths: ApplicationPaths, resources: ResourceManager,
-                 password: str = os.getenv('SECRETS_STORE_PASSWORD', None), aws_profile=None,
-                 aws_sso=False) -> None:
+    def __init__(self, application_paths=None, application_settings=None) -> None:
         super().__init__()
-        self.app_paths = app_paths
-        self.resources = resources
-        self.resources.add_resource_path(EMBEDDED_RESOURCES)
-        self.secrets_store_path = build_secrets_path(self.app_paths)
+        self.application_paths = application_paths
+        self.application_settings = application_settings
+        self.stores = []
 
-        try:
-            if aws_sso:
-                aws_sso_resp = self.run(f'aws2 sso login --profile {aws_profile}')
-                if not aws_sso_resp or "Successfully logged into Start URL" not in aws_sso_resp:
-                    raise SecretsStoreException(f"Unable to initialise SSO for the AWS profile {aws_profile}.  Please "
-                                                f"confirm you have the AWS CLI Installed.")
-            aws_session = boto3.session.Session(profile_name=aws_profile)
-            self.aws_secretsmanager = aws_session.client('secretsmanager')
-            self.aws_secretsmanager.list_secrets()
-        except Exception as ex:
-            logging.warning(f'AWS Secrets Manager, Not Available. Error: {str(ex)}')
-            self.aws_secretsmanager = None
+        if not self.application_paths:
+            self.application_paths = ApplicationPaths()
 
-        if password is None:
-            password = self.guid()
+        if not self.application_settings:
+            self.application_settings = Settings()
 
-        if not os.path.exists(self.secrets_store_path):
-            self.__initialise_secrets_store(password)
+        self.secrets_manager_settings = self.application_settings.get("secrets_manager", {})
+        self.stores.append(LocalSecretStore(store_name="User_Local_Store",
+                                            store_priority=SecretsManagerScopePriorities.USER,
+                                            root_store_path=self.application_paths.usr_data_root_path))
+        self.stores.append(LocalSecretStore(store_name="App_Local_Store",
+                                            store_priority=SecretsManagerScopePriorities.APP,
+                                            root_store_path=self.application_paths.app_data_root_path))
 
-        try:
-            self.keepass_instance = PyKeePass(self.secrets_store_path, password)
-            self.__set_environment_variables()
-        except Exception as ex:
-            raise SecretsStoreException(f'Failed to open Secrets Store: {str(ex)}')
+        if "aws_secrets" in self.secrets_manager_settings:
+            self.stores.append(AWSSecretsStore(store_priority=SecretsManagerScopePriorities.AWS,
+                                               aws_settings=self.secrets_manager_settings["aws_secrets"]))
 
-        logging.info(f'Successfully opened Secrets Store: {self.secrets_store_path}')
+        if "azure_secrets" in self.secrets_manager_settings:
+            self.stores.append(AzureSecretsStore(store_priority=SecretsManagerScopePriorities.AZURE,
+                                                 azure_settings=self.secrets_manager_settings["azure_secrets"]))
 
-    def __store_group(self):
-        return self.keepass_instance.find_groups(name=SECRETS_STORE_GROUP, first=True)
+        self.stores.sort(key=lambda x: x.priority().value)
 
-    def __set_environment_variables(self):
-        for entry in self.__store_group().entries:
-            if entry.username == SECRETS_ENV_TAG:
-                os.environ[entry.title] = entry.password
+    def get_secret(self, key, default_value=None, scope=None):
+        value = None
+        for store in self.stores:
+            if scope and scope == store.priority():
+                value = store.get_secret(key, None)
+                break
+            elif not scope:
+                value = store.get_secret(key, None)
+                if value:
+                    break
 
-    def __initialise_secrets_store(self, password):
-        try:
-            logging.info(f'Creating Secrets Store at: {self.secrets_store_path}')
-            copyfile(self.resources.get_resource_path(SECRETS_TEMPLATE), self.secrets_store_path)
+        if not value:
+            logging.warning(f'The Secret {key} was not found.  Returning default value.')
+            value = default_value
 
-            keepass_instance = PyKeePass(self.secrets_store_path, DEFAULT_PASSWORD)
-            keepass_instance.password = password
-            keepass_instance.add_group(keepass_instance.root_group, SECRETS_STORE_GROUP)
-            keepass_instance.save()
-            logging.info(f'Successfully created Secrets Store.')
-        except Exception as ex:
-            logging.error(f'Failed to create Secrets Store.  Error: {str(ex)}')
-            raise ex
+        return value
 
-    def run(self, cmd):
-        try:
-            return subprocess.run(cmd, shell=True, capture_output=True, check=True, encoding="utf-8") \
-                .stdout \
-                .strip()
-        except:
-            return None
+    def set_secret(self, key, value, scope=None):
+        if not scope:
+            logging.warning("No scope was provided. Setting scope to USER.")
+            scope = SecretsManagerScopePriorities.USER
 
-    def guid(self):
-        base = None
-        if sys.platform == 'darwin':
-            base = self.run(
-                "ioreg -d2 -c IOPlatformExpertDevice | awk -F\\\" '/IOPlatformUUID/{print $(NF-1)}'",
-            )
+        for store in self.stores:
+            if scope == store.priority():
+                store.set_secret(key, value)
+                break
 
-        if sys.platform == 'win32' or sys.platform == 'cygwin' or sys.platform == 'msys':
-            base = self.run('wmic csproduct get uuid').split('\n')[2] \
-                .strip()
+    def delete_secret(self, key, scope=None):
+        if not scope:
+            logging.warning("No scope was provided. Setting scope to USER.")
+            scope = SecretsManagerScopePriorities.USER
 
-        if sys.platform.startswith('linux'):
-            base = self.run('cat /var/lib/dbus/machine-id') or \
-                   self.run('cat /etc/machine-id')
-
-        if sys.platform.startswith('openbsd') or sys.platform.startswith('freebsd'):
-            base = self.run('cat /etc/hostid') or \
-                   self.run('kenv -q smbios.system.uuid')
-
-        if not base:
-            raise SecretsStoreException("Failed to determined unique machine ID")
-
-        key = re.sub("[^a-zA-Z]+", "", base)
-        xored = ''.join(chr(ord(x) ^ ord(y)) for (x, y) in zip(base, cycle(key)))
-        return pybase64.b64encode_as_string(xored.encode())
-
-    def add_secret(self, name: str, secret: str, init_env: bool = False, hidden: bool = False):
-        if self.get_entry(name):
-            self.delete_entry(name)
-
-        if init_env and hidden:
-            raise SecretsStoreException(f' Entry "{name}" can not be both HIDDEN and ENVIRONMENT initialised.')
-
-        tag = '-'
-        if init_env:
-            tag = SECRETS_ENV_TAG
-        if hidden:
-            tag = SECRETS_HIDDEN_TAG
-
-        self.keepass_instance.add_entry(self.__store_group(), name, tag, secret)
-
-        self.save()
-
-    def create_secret(self, name: str, init_env: bool = False, hidden: bool = False, length: int = 10) -> str:
-        lower = string.ascii_lowercase
-        upper = string.ascii_uppercase
-        numbers = string.digits
-        symbols = string.punctuation
-
-        secret = random.sample(lower + upper + numbers + symbols, length)
-        secret = "".join(secret)
-
-        self.add_secret(name=name, secret=secret, init_env=init_env, hidden=hidden)
-        return secret
-
-    def delete_entry(self, name):
-        entry = self.keepass_instance.find_entries(title=name, group=self.__store_group(), first=True)
-        entry.delete()
-        self.save()
-
-    def get_entry(self, name: str):
-        entry = None
-        try:
-            if self.aws_secretsmanager:
-                entry = self.aws_secretsmanager.get_secret_value(SecretId=name)['SecretString']
-        except:
-            logging.warning(f'Secret {name} not found in AWS SecretsManager.  Trying Local Instance.')
-
-        if not entry:
-            entry = self.keepass_instance.find_entries(title=name, group=self.__store_group(), first=True)
-
-        return entry
-
-    def get_secret(self, name: str) -> str:
-        entry = self.get_entry(name)
-        if entry is None:
-            raise SecretsStoreException(f'Secret {name} does not exists in store.')
-
-        if isinstance(entry, str):
-            return entry
-        return entry.password
-
-    def get_secret_names(self, exclude_hidden: bool = True) -> list:
-        secret_keys = []
-        for entry in self.__store_group().entries:
-            if not (entry.username == SECRETS_HIDDEN_TAG and exclude_hidden):
-                secret_keys.append(entry.title)
-        return secret_keys
-
-    def save(self):
-        self.keepass_instance.save()
-
-    def close(self):
-        self.save()
-
-
-secret_store: SecretsStore = None
-
-
-def get_secret_store(app_paths: ApplicationPaths, resources: ResourceManager, password=None, aws_profile=None,
-                     aws_sso=False):
-    global secret_store
-
-    if secret_store is None:
-        if password is None:
-            secret_store = SecretsStore(app_paths=app_paths, resources=resources, aws_profile=aws_profile,
-                                        aws_sso=aws_sso)
-        else:
-            secret_store = SecretsStore(app_paths=app_paths, resources=resources, password=password,
-                                        aws_profile=aws_profile, aws_sso=aws_sso)
-
-    return secret_store
+        for store in self.stores:
+            if scope and scope == store.priority():
+                value = store.delete_secret(key)
+                break

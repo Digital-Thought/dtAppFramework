@@ -1,190 +1,38 @@
-from sqlalchemy import Column, Integer, String
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from ..paths import ApplicationPaths
+from ..misc import singleton
+from .settings_reader import SettingsReader
+from .persistent_settings import PersistentSettingStore, PersistentSettingScope
 
-import json
-import yaml
-import logging
 import os
 
-from typing import Union
-from ..secrets_store import get_secret_store
-from ..paths import ApplicationPaths
-from ..resources import ResourceManager
 
-Base = declarative_base()
+@singleton()
+class Settings(dict):
 
+    def __init__(self, application_paths=None) -> None:
+        self.application_paths = application_paths
+        if not self.application_paths:
+            self.application_paths = ApplicationPaths()
 
-class Setting(Base):
-    """
-    The Base Settings Model
-    """
-    __tablename__ = 'persistent_settings'
+        self.settings_readers = []
+        self.persistent_settings_stores = []
 
-    id = Column(Integer, primary_key=True)
-    value_name = Column(String(100))
-    value = Column(String(1024))
-    type = Column(String(24))
-
-
-class PersistentSettingStore(object):
-    """
-    A helper class to persist settings to SQL List database at the defined path.
-    """
-
-    def __init__(self, path: str) -> None:
-        """
-        Initialise the persistent settings store.
-        SQLite DB will be created at the provided path.
-        Will open the existing database if already exists.
-        :param path: The path to the SQLite database
-        :type path: str
-        """
-        engine = create_engine(f'sqlite:///{path}?check_same_thread=False')
-        Base.metadata.create_all(engine)
-        self.DBSession = sessionmaker(bind=engine)
+        self.init_settings_readers()
+        self.init_persistent_settings_stores()
         super().__init__()
 
-    def store(self, key: str, value: Union[str, int, float, dict, bool]) -> Union[str, int, float, dict, bool]:
-        """
+    def init_settings_readers(self):
+        self.settings_readers.append(SettingsReader(os.path.join(os.getcwd(), "config"), 300))
+        self.settings_readers.append(SettingsReader(self.application_paths.app_data_root_path, 200))
+        self.settings_readers.append(SettingsReader(self.application_paths.usr_data_root_path, 100))
+        self.settings_readers.sort(key=lambda x: x.priority)
 
-        :param key:
-        :type key:
-        :param value:
-        :type value:
-        :return:
-        :rtype:
-        """
-
-        if self.get(key=key):
-            self.__delete__(key=key)
-
-        session = self.DBSession()
-        setting = Setting()
-        setting.value_name = key
-
-        if isinstance(value, str):
-            setting.type = 'str'
-            setting.value = value
-        elif isinstance(value, bool):
-            setting.type = 'bool'
-            setting.value = str(value)
-        elif isinstance(value, int):
-            setting.type = 'int'
-            setting.value = str(value)
-        elif isinstance(value, float):
-            setting.type = 'float'
-            setting.value = str(value)
-        elif isinstance(value, dict):
-            setting.type = 'dict'
-            setting.value = json.dumps(value)
-        else:
-            raise Exception('Unsupported value type')
-
-        session.add(setting)
-        session.commit()
-        return value
-
-    def __delete__(self, key: str):
-        session = self.DBSession()
-        session.query(Setting).filter(Setting.value_name == key).delete()
-        session.commit()
-
-    def delete(self, key) -> Union[str, int, float, dict, bool, None]:
-        """
-
-        :param key:
-        :type key:
-        :return:
-        :rtype:
-        """
-        setting = self.get(key)
-        if setting is not None:
-            self.__delete__(key)
-            return setting
-        return None
-
-    def get(self, key: str, default: Union[str, int, float, dict, bool, None] = None) -> Union[
-        str, int, float, dict, bool, None]:
-        """
-
-        :param key:
-        :type key:
-        :param default:
-        :type default:
-        :return:
-        :rtype:
-        """
-        session = self.DBSession()
-        setting = session.query(Setting).filter(Setting.value_name == key).first()
-        if not setting:
-            return default
-
-        if setting.type == 'str':
-            return setting.value
-        elif setting.type == 'int':
-            return int(setting.value)
-        elif setting.type == 'float':
-            return float(setting.value)
-        elif setting.type == 'bool':
-            return setting.value == 'True'
-        elif setting.type == 'dict':
-            return json.loads(setting.value)
-        else:
-            raise Exception('Unsupported value type')
-
-
-class Configuration(dict):
-    """
-    Configuration Dictionary for OSINT Platform.
-    Configuration can be defined in the YAML file.
-    """
-
-    def __init__(self, app_paths: ApplicationPaths) -> None:
-        """
-        Initialises the configuration settings dictionary.
-        """
-        self.app_paths = app_paths
-        self.app_config_file = f'{self.app_paths.app_data_root_path}/config.yaml'
-        self.usr_config_file = f'{self.app_paths.usr_data_root_path}/config.yaml'
-        self.app_persistent_settings_store = None
-        self.usr_persistent_settings_store = None
-        self.reload_yaml()
-        self.resource_manager = ResourceManager(app_paths=self.app_paths)
-
-        self.app_persistent_settings_store = PersistentSettingStore(
-            path=f'{self.app_paths.app_data_root_path}/persistent.settings')
-        self.usr_persistent_settings_store = PersistentSettingStore(
-            path=f'{self.app_paths.usr_data_root_path}/persistent.settings')
-        super().__init__()
-
-    def load_yaml_file(self, path) -> 'Configuration':
-        """
-        Loads the specified YAML file into the configuration.
-        If a path is not provided, it will use the file path specific when the 'Configuration' was initialised.
-        """
-
-        with open(path, 'r', encoding='UTF-8') as file:
-            self.update(yaml.safe_load(file))
-        return self
-
-    def reload_yaml(self) -> 'Configuration':
-        """
-        Reloads the configuration from the previously defined YAML file path.
-        Note: this will clear all current settings before re-loading.
-        :return: Re-loaded configuration
-        :rtype: 'Configuration'
-        """
-        if os.path.exists(self.app_config_file):
-            self.load_yaml_file(self.app_config_file)
-            logging.info(f'Loaded APP configuration from: {self.app_config_file}')
-
-        if os.path.exists(self.usr_config_file):
-            self.load_yaml_file(self.usr_config_file)
-            logging.info(f'Loaded USER configuration from: {self.usr_config_file}')
-
-        return self
+    def init_persistent_settings_stores(self):
+        self.persistent_settings_stores.append(PersistentSettingStore(self.application_paths.app_data_root_path,
+                                                                      PersistentSettingScope.APP))
+        self.persistent_settings_stores.append(PersistentSettingStore(self.application_paths.usr_data_root_path,
+                                                                      PersistentSettingScope.USER))
+        self.persistent_settings_stores.sort(key=lambda x: x.priority.value)
 
     def get_requests_tor_proxy(self) -> dict:
         """
@@ -205,35 +53,25 @@ class Configuration(dict):
         proxy = self.get('settings.proxies.tor_proxy', '127.0.0.1:9150')
         return '--proxy-server=socks5://' + proxy
 
-    def set_app_item(self, key, value):
-        # if the value of a setting is changed or new setting added,
-        # then it will add it to the persistent store and will override any settings in the config YAML.
-        return self.app_persistent_settings_store.store(key=key, value=value)
-
-    def __setitem__(self, key, value):
-        # if the value of a setting is changed or new setting added,
-        # then it will add it to the persistent store and will override any settings in the config YAML.
-        return self.usr_persistent_settings_store.store(key=key, value=value)
-
     def get(self, key, default=None):
         try:
             value = self.__getitem__(key)
             if isinstance(value, str) and str(value).startswith('ENV/'):
                 return os.getenv(str(value).replace('ENV/', '').strip(), value)
             if isinstance(value, str) and str(value).startswith('SEC/'):
-                return get_secret_store(self.app_paths, resources=self.resource_manager, aws_profile=self.get("secrets_store.aws_profile", None), aws_sso=config.get("secrets_store.aws_sso", False)).get_secret(str(value).replace('SEC/', '').strip())
+                from ..secrets_store import SecretsManager
+                return SecretsManager().get_secret(str(value).replace('SEC/', '').strip(), default)
             if not value:
                 return default
             return value
         except KeyError:
             return default
 
-    def get_secret(self, key, default=None):
-        try:
-            return get_secret_store(self.app_paths, resources=self.resource_manager, aws_profile=self.get("secrets_store.aws_profile", None), aws_sso=config.get("secrets_store.aws_sso", False)).get_secret(key)
-        except:
-            logging.warning(f"Secret '{key}' not found. Returning default.")
-            return default
+    def set(self, key, value, scope=PersistentSettingScope.USER):
+        for persistent_store in self.persistent_settings_stores:
+            if persistent_store.priority == scope:
+                persistent_store.store(key, value)
+                break
 
     def __getattr__(self, key):
         try:
@@ -241,42 +79,21 @@ class Configuration(dict):
         except KeyError:
             raise AttributeError("object has no attribute '%s'" % key)
 
+    def __setitem__(self, key, value):
+        # if the value of a setting is changed or new setting added,
+        # then it will add it to the persistent store and will override any settings in the config YAML.
+        return self.set(key=key, value=value)
+
     def __getitem__(self, key):
-        persistent_value = None
-        if self.app_persistent_settings_store:
-            persistent_value = self.app_persistent_settings_store.get(key)
-        if self.usr_persistent_settings_store:
-            persistent_value = self.usr_persistent_settings_store.get(key)
-        if persistent_value is not None:
-            return persistent_value
-        keys = key.split('.')
-        if len(keys) == 1:
-            return dict.__getitem__(self, key)
-        else:
-            data = self.copy()
-            for key in keys:
-                if key in data:
-                    data = data[key]
-                else:
-                    return None
-            return data
+        for persistent_store in self.persistent_settings_stores:
+            persistent_value = persistent_store.get(key)
+            if persistent_value:
+                return persistent_value
 
+        value = None
+        for reader in self.settings_readers:
+            value = reader.__getitem__(key)
+            if value:
+                break
 
-config: Union[Configuration, None] = None
-"""
-The loaded Configuration.  This will be None until load(path) is called.
-"""
-
-
-def load(path: ApplicationPaths) -> Configuration:
-    """
-    Loads the configuration from the YAML file.
-    If the YAML file is not specified in 'path' the default location is used: './config/osint_config.yaml'
-    :param path: Path to the YAML file with the configuration.  If not provided, the default DEFAULT_CONFIG_LOCATION used
-    :type path: str
-    :return: The loaded configuration
-    :rtype: Configuration
-    """
-    global config
-    config = Configuration(app_paths=path)
-    return config
+        return value

@@ -1,20 +1,24 @@
 import argparse
 import logging
 import os
+import sys
+
 import psutil
 import traceback
 
 from multiprocessing import current_process
 from argparse import ArgumentParser
+from contextlib import redirect_stdout, redirect_stderr
 from . import app_logging
 from . import paths
 from . import settings
 from . import secrets_store
+from . import resources
 
 
 class AbstractApp(object):
 
-    def __init__(self, description=None, version=None, short_name=None, full_name=None) -> None:
+    def __init__(self, description=None, version=None, short_name=None, full_name=None, console_app=True) -> None:
         self.app_spec = {
             'description': description,
             'version': version,
@@ -24,9 +28,12 @@ class AbstractApp(object):
         for key in self.app_spec:
             if not self.app_spec[key]:
                 raise Exception(f"Missing '{key}'")
-        self.app_paths = None
+        self.console_app = console_app
+        self.application_paths = None
+        self.application_settings = None
+        self.secrets_manager = None
+        self.resource_manager = None
         self.log_path = None
-        self.settings = None
         super().__init__()
 
     def version(self) -> str:
@@ -42,16 +49,8 @@ class AbstractApp(object):
         raise NotImplementedError
 
     def load_config(self, args):
-        config = settings.load(self.app_paths)
-
-        if args.password:
-            secrets_store.get_secret_store(app_paths=self.app_paths, password=args.password, resources=config.resource_manager, aws_profile=config.get("secrets_store.aws_profile", None), aws_sso=config.get("secrets_store.aws_sso", False))
-        else:
-            secrets_store.get_secret_store(app_paths=self.app_paths, resources=config.resource_manager, aws_profile=config.get("secrets_store.aws_profile", None), aws_sso=config.get("secrets_store.aws_sso", False))
-
-        self.settings = config
         if not self.is_multiprocess_spawned_instance():
-            self.app_paths.log_paths()
+            self.application_paths.log_paths()
 
     def __main(self, args):
         self.load_config(args)
@@ -73,8 +72,6 @@ class AbstractApp(object):
                                     help="Secrets Store password")
             arg_parser.add_argument('--name', action='store', type=str, required=True, help="Secret Name")
             arg_parser.add_argument('--value', action='store', type=str, required=True, help="Secret Value")
-            arg_parser.add_argument('--env', action='store_true',
-                                   help="Load secret as environment variable on Secrets Store initialisation")
         else:
             arg_parser.add_argument('--password', action='store', type=str,
                                     required=False, help="Secrets Store password")
@@ -82,46 +79,64 @@ class AbstractApp(object):
             self.define_args(arg_parser)
 
     def __add_secret__(self, args):
-        config = settings.load(self.app_paths)
         try:
-            if args.password:
-                store = secrets_store.get_secret_store(app_paths=self.app_paths, password=args.password, resources=config.resource_manager, aws_profile=config.get("secrets_store.aws_profile", None), aws_sso=config.get("secrets_store.aws_sso", False))
-            else:
-                store = secrets_store.get_secret_store(app_paths=self.app_paths, resources=config.resource_manager, aws_profile=config.get("secrets_store.aws_profile", None), aws_sso=config.get("secrets_store.aws_sso", False))
-
-            store.add_secret(args.name, args.value, args.env)
-            store.close()
+            self.secrets_manager.set_secret(args.name, args.value)
         except Exception as ex:
             logging.error(f'Error occurred while adding secret {args.name}.  Error: {str(ex)}')
             raise ex
 
+    def __initialise_singletons(self):
+        self.application_paths = paths.ApplicationPaths(app_short_name=self.app_spec['short_name'],
+                                                        spawned_instance=self.is_multiprocess_spawned_instance())
+        self.application_settings = settings.Settings(application_paths=self.application_paths)
+        self.secrets_manager = secrets_store.SecretsManager(application_paths=self.application_paths,
+                                                            application_settings=self.application_settings)
+        self.resource_manager = resources.ResourceManager(application_paths=self.application_paths)
+
     def run(self):
-        arg_parser = argparse.ArgumentParser(prog=self.app_spec["short_name"], description=self.app_spec["description"])
-        self.__define_args(arg_parser)
-        self.app_paths = paths.load(app_short_name=self.app_spec['short_name'], spawned_instance=self.is_multiprocess_spawned_instance())
+        try:
+            arg_parser = argparse.ArgumentParser(prog=self.app_spec["short_name"], description=self.app_spec["description"])
+            self.__define_args(arg_parser)
+            self.__initialise_singletons()
+            self.log_path = app_logging.initialise_logging(spawned_process=self.is_multiprocess_spawned_instance(),
+                                                           redirect_console=not self.console_app)
+            stdout_txt_file = None
+            stderr_txt_file = None
 
-        self.log_path = app_logging.init(self.app_spec["short_name"], app_paths=self.app_paths,
-                                         spawned_process=self.is_multiprocess_spawned_instance())
+            if not self.console_app:
+                stdout_txt = '{}/stdout.txt'.format(self.log_path, self.application_paths.app_short_name)
+                stderr_txt = '{}/stderr.txt'.format(self.log_path, self.application_paths.app_short_name)
 
-        if not self.is_multiprocess_spawned_instance():
-            logging.info(
-                f'{self.app_spec["full_name"]} ({self.app_spec["short_name"]}), Version: {self.app_spec["version"]}. '
-                f'Process ID: {os.getpid()}')
-            print(f'Version: {self.app_spec["version"]}')
-            if self.log_path is not None:
-                print(f'Log Path: {self.log_path}')
-            print('\n')
-        else:
-            logging.info(
-                f'SPAWNED PROCESS --- {self.app_spec["full_name"]} ({self.app_spec["short_name"]}), Version: {self.app_spec["version"]}. '
-                f'Process ID: {os.getpid()}')
+                stdout_txt_file = open(stdout_txt, mode='w', buffering=1)
+                stderr_txt_file = open(stderr_txt, mode='w', buffering=1)
+                sys.stdout = stdout_txt_file
+                sys.stderr = stderr_txt_file
 
-        args = arg_parser.parse_args()
-
-        if not self.is_multiprocess_spawned_instance():
-            if args.add_secret:
-                self.__add_secret__(args)
+            if not self.is_multiprocess_spawned_instance():
+                header_message = f'{self.app_spec["full_name"]} ({self.app_spec["short_name"]}), ' \
+                                 f'Version: {self.app_spec["version"]}. Process ID: {os.getpid()}'
+                logging.info(header_message)
+                print(header_message)
+                if self.log_path is not None:
+                    print(f'Log Path: {self.log_path}')
+                print('\n')
             else:
-                self.__main(args)
-        else:
-            self.load_config(args)
+                header_message = f'SPAWNED PROCESS --- {self.app_spec["full_name"]} ({self.app_spec["short_name"]}), ' \
+                                 f'Version: {self.app_spec["version"]}. '
+                logging.info(header_message)
+                print(header_message)
+
+            args = arg_parser.parse_args()
+
+            if not self.is_multiprocess_spawned_instance():
+                if args.add_secret:
+                    self.__add_secret__(args)
+                else:
+                    self.__main(args)
+            else:
+                self.load_config(args)
+        except KeyboardInterrupt as kbi:
+            logging.warning('(KeyboardInterrupt) Exiting application.')
+            if not self.console_app:
+                stdout_txt_file.close()
+                stderr_txt_file.close()

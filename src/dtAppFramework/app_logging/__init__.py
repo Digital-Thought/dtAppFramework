@@ -4,19 +4,19 @@ import os
 import pathlib
 import multiprocessing
 
+from logging import Formatter
+
 from datetime import datetime
 
 import yaml
 from colorlog import ColoredFormatter
 
 from ..paths import ApplicationPaths
-
-logging_resource_folder = "{}/../_resources".format(str(pathlib.Path(__file__).parent.absolute()))
-default_logging_configuration_file = f'{logging_resource_folder}/default_config.yaml'
-logging_configuration_file = './config/loggingConfig.yaml'
+from ..settings import Settings
+from .default_logging import default_config
+from logging import Formatter
 
 DEFAULT_FORMATTER = '%(log_color)s%(asctime)s - %(levelname)-8s - %(processName)s.%(process)d - %(threadName)s.%(thread)d - %(module)s.%(funcName)s.%(lineno)-3d - %(message)s%(reset)s'
-DEFAULT_ELASTIC_FORMATTER = 'ELASTIC: %(log_color)s%(asctime)s - %(levelname)-8s - %(processName)s.%(process)d - %(threadName)s.%(thread)d - %(module)s.%(funcName)s.%(lineno)-3d - %(message)s%(reset)s'
 
 
 def new_job():
@@ -37,28 +37,36 @@ def new_job():
     return job_id
 
 
-def init(app_name, app_paths: ApplicationPaths, configuration_file: str = None, spawned_process=False):
-    if configuration_file and not os.path.exists(configuration_file):
-        raise FileNotFoundError(f'Missing specified logging configuration file: {configuration_file}')
+def get_logging_config(logging_source=None):
+    application_paths = ApplicationPaths()
+    config_path = None
+    if logging_source:
+        config_path = logging_source
+    else:
+        for _path in [os.path.join(application_paths.usr_data_root_path, "loggingConfig.yaml"),
+                      os.path.join(application_paths.app_data_root_path, "loggingConfig.yaml"),
+                      os.path.join(os.getcwd(), "config", "loggingConfig.yaml")]:
+            if os.path.exists(_path):
+                config_path = _path
+                break
 
-    using_default = False
+    if config_path:
+        return config_path, yaml.safe_load(config_path)
+    else:
+        return "DEFAULT", default_config(log_level=Settings().get("logging.level", "INFO"))
+
+
+def initialise_logging(spawned_process=False, redirect_console=False):
+    app_paths = ApplicationPaths()
     if spawned_process:
         using_default = bool(os.environ['_dt_using_default'])
-        logging_config_file = os.environ['_dt_logging_config_file']
+        logging_source = os.environ['_dt_logging_config_file']
+        logging_source, logging_config = get_logging_config(logging_source)
     else:
-        if configuration_file and os.path.exists(configuration_file):
-            logging_config_file = configuration_file
-        elif os.path.exists(logging_configuration_file):
-            logging_config_file = logging_configuration_file
-        else:
-            logging_config_file = default_logging_configuration_file
-            using_default = True
-
-        os.environ['_dt_using_default'] = str(using_default)
-        os.environ['_dt_logging_config_file'] = logging_config_file
-
-    with open(logging_config_file, 'r') as config_file:
-        logging_config = yaml.safe_load(config_file)
+        logging_source, logging_config = get_logging_config()
+        os.environ['_dt_using_default'] = str(logging_source == "DEFAULT")
+        os.environ['_dt_logging_config_file'] = logging_source
+        using_default = logging_source == "DEFAULT"
 
     if using_default:
         if spawned_process:
@@ -72,27 +80,31 @@ def init(app_name, app_paths: ApplicationPaths, configuration_file: str = None, 
 
         os.makedirs(log_folder, exist_ok=True)
 
-        formatter = ColoredFormatter(DEFAULT_FORMATTER)
-
-        console_stream = logging.StreamHandler()
-        console_stream.setLevel(logging.DEBUG)
-        console_stream.setFormatter(formatter)
-        console_stream.name = 'console_ALL'
-
-        logging_config['handlers']['logfile_ALL']['filename'] = '{}/info-{}.log'.format(log_folder, app_name)
-        logging_config['handlers']['logfile_ERR']['filename'] = '{}/error-{}.log'.format(log_folder, app_name)
-        logging_config['handlers']['logfile_ELASTIC']['filename'] = '{}/elastic-{}.log'.format(log_folder, app_name)
+        logging_config['handlers']['logfile_ALL']['filename'] = '{}/info-{}.log'.format(log_folder,
+                                                                                        app_paths.app_short_name)
+        logging_config['handlers']['logfile_ERR']['filename'] = '{}/error-{}.log'.format(log_folder,
+                                                                                         app_paths.app_short_name)
+        logging_config['handlers']['logfile_ELASTIC']['filename'] = '{}/elastic-{}.log'.format(log_folder,
+                                                                                               app_paths.app_short_name)
         logging.config.dictConfig(logging_config)
-        logging.getLogger().addHandler(console_stream)
-        logging.getLogger("defaultLogger").addHandler(console_stream)
 
-        logging.getLogger('console').addHandler(console_stream)
-        logging.getLogger('console').debug('Logging configuration read from: {}'.format(logging_config_file))
+        if not redirect_console:
+            formatter = ColoredFormatter(DEFAULT_FORMATTER)
+
+            console_stream = logging.StreamHandler()
+            console_stream.setLevel(logging.DEBUG)
+            console_stream.setFormatter(formatter)
+            console_stream.name = 'console_ALL'
+
+            logging.getLogger().addHandler(console_stream)
+            logging.getLogger("defaultLogger").addHandler(console_stream)
+
+            logging.getLogger('console').addHandler(console_stream)
+            logging.getLogger('console').debug('Logging configuration read from: {}'.format(logging_source))
 
         return os.path.abspath(log_folder)
 
     else:
         logging.config.dictConfig(logging_config)
-        logging.debug('Logging configuration read from: {}'.format(logging_config_file))
-
+        logging.debug('Logging configuration read from: {}'.format(logging_source))
         return None

@@ -3,37 +3,32 @@ import os
 import shutil
 import logging
 
-from typing import Union
 from multiprocessing import current_process
+from ..misc import singleton
 
 
+@singleton()
 class ApplicationPaths(object):
-    _instance = None
 
-    def __new__(cls, app_short_name=None, forced_os=None, forced_dev_mode=False, auto_create=True,
-                clean_temp=True, spawned_instance=False, *args, **kwargs):
-        if not cls._instance:
-            cls._instance = super(ApplicationPaths, cls).__new__(cls, *args, **kwargs)
-        return cls._instance
-
-    def __init__(self, app_short_name=None, forced_os=None, forced_dev_mode=False, auto_create=True,
+    def __init__(self, app_short_name, forced_os=None, forced_dev_mode=False, auto_create=True,
                  clean_temp=True, spawned_instance=False, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        if app_short_name:
-            self.app_short_name = app_short_name
-            self.forced_os = forced_os
-            self.spawned_instance = spawned_instance
-            self.auto_create = auto_create
-            self.clean_temp = clean_temp
-            self.forced_dev_mode = forced_dev_mode
+        super().__init__()
+        self.app_short_name = app_short_name
+        self.forced_os = forced_os
+        self.spawned_instance = spawned_instance
+        self.auto_create = auto_create
+        self.clean_temp = clean_temp
+        self.forced_dev_mode = forced_dev_mode
 
-            if self.forced_dev_mode:
-                os.environ['DEV_MODE'] = "True"
+        if self.forced_dev_mode:
+            os.environ['DEV_MODE'] = "True"
 
-            self.logging_root_path = self.__init_logging_root_path()
-            self.app_data_root_path = self.__init_app_data_root_path()
-            self.usr_data_root_path = self.__init_usr_data_root_path()
-            self.tmp_root_path = self.__init_tmp_root_path()
+        self.logging_root_path = self.__init_logging_root_path()
+        self.app_data_root_path = self.__init_app_data_root_path()
+        self.usr_data_root_path = self.__init_usr_data_root_path()
+        self.tmp_root_path = self.__init_tmp_root_path()
+
+        self.__init_directories()
 
     def log_paths(self):
         logging.info(f'Logging Root Path: {self.logging_root_path}')
@@ -115,19 +110,3 @@ class ApplicationPaths(object):
 
         os.environ['dt_TMP'] = _path
         return _path
-
-
-app_paths: Union[ApplicationPaths, None] = None
-"""
-The loaded ApplicationPaths.  This will be None until load is called.
-"""
-
-
-def load(app_short_name, forced_os=None, forced_dev_mode=False, auto_create=True,
-         clean_temp=True, spawned_instance=False) -> ApplicationPaths:
-    """
-    """
-    global app_paths
-    app_paths = ApplicationPaths(app_short_name=app_short_name, forced_os=forced_os, forced_dev_mode=forced_dev_mode,
-                                 auto_create=auto_create, clean_temp=clean_temp, spawned_instance=spawned_instance)
-    return app_paths
