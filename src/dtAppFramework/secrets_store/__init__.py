@@ -35,9 +35,13 @@ class SecretsManager(object):
         self.stores.append(LocalSecretStore(store_name="User_Local_Store",
                                             store_priority=SecretsManagerScopePriorities.USER,
                                             root_store_path=self.application_paths.usr_data_root_path))
-        self.stores.append(LocalSecretStore(store_name="App_Local_Store",
-                                            store_priority=SecretsManagerScopePriorities.APP,
-                                            root_store_path=self.application_paths.app_data_root_path))
+
+        try:
+            self.stores.append(LocalSecretStore(store_name="App_Local_Store",
+                                                store_priority=SecretsManagerScopePriorities.APP,
+                                                root_store_path=self.application_paths.app_data_root_path))
+        except Exception as ex:
+            print(f'Skipping APP Local Secret Store. {ex}')
 
         if "aws_secrets" in self.secrets_manager_settings:
             self.stores.append(AWSSecretsStore(store_priority=SecretsManagerScopePriorities.AWS,

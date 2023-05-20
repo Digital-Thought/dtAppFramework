@@ -43,9 +43,12 @@ class ApplicationPaths(object):
         if self.auto_create:
             os.makedirs(self.tmp_root_path, exist_ok=True)
             os.makedirs(self.logging_root_path, exist_ok=True)
-            os.makedirs(self.app_data_root_path, exist_ok=True)
             os.makedirs(self.usr_data_root_path, exist_ok=True)
-            os.makedirs(self.tmp_root_path, exist_ok=True)
+
+            try:
+                os.makedirs(self.app_data_root_path, exist_ok=True)
+            except Exception as ex:
+                print(f'Skipping creation of application data path {self.app_data_root_path}. {ex}')
 
     def __os(self):
         if self.forced_os:
