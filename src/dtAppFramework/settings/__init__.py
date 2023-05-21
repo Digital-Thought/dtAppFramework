@@ -28,8 +28,11 @@ class Settings(dict):
         self.settings_readers.sort(key=lambda x: x.priority)
 
     def init_persistent_settings_stores(self):
-        self.persistent_settings_stores.append(PersistentSettingStore(self.application_paths.app_data_root_path,
-                                                                      PersistentSettingScope.APP))
+        try:
+            self.persistent_settings_stores.append(PersistentSettingStore(self.application_paths.app_data_root_path,
+                                                                          PersistentSettingScope.APP))
+        except Exception as ex:
+            print(f'Skipping support for application scope persistent store. {ex}')
         self.persistent_settings_stores.append(PersistentSettingStore(self.application_paths.usr_data_root_path,
                                                                       PersistentSettingScope.USER))
         self.persistent_settings_stores.sort(key=lambda x: x.priority.value)
