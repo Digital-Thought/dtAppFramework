@@ -1,4 +1,4 @@
-_VERSION = '1.1.0a6'
+_VERSION = '1.1.0a7'
 _MAINTAINER = 'Matthew @ Digital-Thought'
 _AUTHOR = 'Digital-Thought'
 _AUTHOR_EMAIL = 'matthew@digital-thought.org'

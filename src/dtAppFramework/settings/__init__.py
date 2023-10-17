@@ -64,6 +64,10 @@ class Settings(dict):
             if isinstance(value, str) and str(value).startswith('SEC/'):
                 from ..secrets_store import SecretsManager
                 return SecretsManager().get_secret(str(value).replace('SEC/', '').strip(), default)
+            #AWS_Secret
+            if isinstance(value, str) and str(value).startswith('AWS_Secret#'):
+                from ..secrets_store import SecretsManager
+                return SecretsManager().get_secret(str(value).strip(), default)
             if not value:
                 return default
             return value

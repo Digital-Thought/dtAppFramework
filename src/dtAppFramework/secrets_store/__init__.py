@@ -1,4 +1,5 @@
 import logging
+import json
 
 from ..paths import ApplicationPaths
 from ..settings import Settings
@@ -53,16 +54,30 @@ class SecretsManager(object):
 
         self.stores.sort(key=lambda x: x.priority().value)
 
+    def get_store(self, scope):
+        for store in self.stores:
+            if scope == store.priority():
+                return store
+
+        return None
+
     def get_secret(self, key, default_value=None, scope=None):
         value = None
-        for store in self.stores:
-            if scope and scope == store.priority():
-                value = store.get_secret(key, None)
-                break
-            elif not scope:
-                value = store.get_secret(key, None)
-                if value:
+        if key.startswith("AWS_Secret#"):
+            elements = key.split("#")
+            aws_store = self.get_store(SecretsManagerScopePriorities.AWS)
+            value = json.loads(aws_store.get_secret(elements[1], "{}"))
+            if len(elements) == 3:
+                value = value[elements[2]]
+        else:
+            for store in self.stores:
+                if scope and scope == store.priority():
+                    value = store.get_secret(key, None)
                     break
+                elif not scope:
+                    value = store.get_secret(key, None)
+                    if value:
+                        break
 
         if not value:
             logging.warning(f'The Secret {key} was not found.  Returning default value.')

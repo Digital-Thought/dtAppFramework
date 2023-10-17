@@ -14,6 +14,7 @@ class AWSSecretsStore(AbstractSecretStore):
             raise SecretsStoreException("AWS Secrets Store requires the AWS Command Line Utility to be installed.")
         self.aws_profile = aws_settings.get('aws_profile', None)
         self.aws_sso = aws_settings.get('aws_sso', False)
+        self.aws_region = aws_settings.get('aws_region', None)
 
         if not self.aws_profile:
             raise SecretsStoreException("AWS Secrets Store requires a valid profile to be provided.")
@@ -23,7 +24,10 @@ class AWSSecretsStore(AbstractSecretStore):
             if not aws_sso_resp or "Successfully logged into Start URL" not in aws_sso_resp:
                 raise SecretsStoreException(f"Unable to initialise SSO for the AWS profile {self.aws_profile}.")
 
-        self.aws_session = boto3.session.Session(profile_name=self.aws_profile)
+        if self.aws_profile != "ec2:instanceProfile":
+            self.aws_session = boto3.session.Session(profile_name=self.aws_profile, region_name=self.aws_region)
+        else:
+            self.aws_session = boto3.session.Session(region_name=self.aws_region)
         self.aws_secretsmanager = self.aws_session.client('secretsmanager')
         try:
             self.aws_secretsmanager.list_secrets()
