@@ -7,9 +7,9 @@ from multiprocessing import Process, Queue
 
 sys.path.append(os.path.abspath('../../src'))
 
-from dtAppFramework import AbstractApp
+from dtAppFramework.app import AbstractApp
 from dtAppFramework import settings
-from dtAppFramework import app_logging
+
 
 
 num_of_procs = 10
@@ -35,7 +35,7 @@ class MultiProcessorApp(AbstractApp):
     def prepare_processors(self, queue, all_reader_procs):
         for x in range(0, num_of_procs):
             logging.info(f"Starting Queue Process: {str(x)}")
-            reader_p = Process(target=queue_processor, args=(queue,))
+            reader_p = Process(target=queue_processor, args=(queue,), name="tt")
             reader_p.start()
             all_reader_procs.append(reader_p)
 

@@ -40,9 +40,9 @@ def new_job():
 def get_logging_config(logging_source=None):
     application_paths = ApplicationPaths()
     config_path = None
-    if logging_source:
+    if logging_source and logging_source != "DEFAULT":
         config_path = logging_source
-    else:
+    elif not logging_source:
         for _path in [os.path.join(application_paths.usr_data_root_path, "loggingConfig.yaml"),
                       os.path.join(application_paths.app_data_root_path, "loggingConfig.yaml"),
                       os.path.join(os.getcwd(), "config", "loggingConfig.yaml")]:
